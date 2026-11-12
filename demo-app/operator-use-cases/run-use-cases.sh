@@ -5,7 +5,12 @@ set -euo pipefail
 CTX="${CONTEXT:?set CONTEXT to your kubectl context}"
 kx() { kubectl --context "$CTX" "$@"; }
 PW=$(kx get secret kafka-ui-admin -n kafka -o jsonpath='{.data.password}' | base64 -d)
-broker() { kx exec -n kafka oda-kafka-kafka-broker-0 -c kafka -- sh -c "printf 'security.protocol=SASL_PLAINTEXT\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username=\"kafka-ui-admin\" password=\"$PW\";\n' > /tmp/a.properties; bin/$1 --bootstrap-server localhost:9092 --command-config /tmp/a.properties ${2:-} 2>/dev/null; rm -f /tmp/a.properties"; }
+broker() { # runs a Kafka CLI on the broker with all its arguments; retries if the kubectl exec stream drops
+  local tries=0
+  until kx exec -n kafka oda-kafka-kafka-broker-0 -c kafka -- sh -c "printf 'security.protocol=SASL_PLAINTEXT\nsasl.mechanism=SCRAM-SHA-512\nsasl.jaas.config=org.apache.kafka.common.security.scram.ScramLoginModule required username=\"kafka-ui-admin\" password=\"$PW\";\n' > /tmp/a.properties; bin/$1 --bootstrap-server localhost:9092 --command-config /tmp/a.properties ${@:2} 2>/dev/null; rm -f /tmp/a.properties"; do
+    tries=$((tries+1)); [ "$tries" -ge 3 ] && break; sleep 5
+  done
+}
 show() {
   echo "--- $1"
   echo "component: $(kx get components.v1.oda.tmforum.org uctest -n components -o jsonpath='{.status.summary/status.deployment_status}' 2>/dev/null || echo gone)"
